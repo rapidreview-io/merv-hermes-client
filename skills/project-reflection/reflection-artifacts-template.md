@@ -6,7 +6,9 @@ errors.
 
 ## Lens reflection
 
-Each lens agent writes and submits its own Markdown document as
+Each lens agent uploads its own Markdown document with
+`artifact.upload(project_id, path)` and runs the returned command. Submit the
+content ID through the assigned child workflow; its transition records
 `reflection_lens_doc` with the roster's exact `lens_id`.
 
 ```markdown
@@ -82,7 +84,7 @@ The decision is the next wave: a DAG of experiments and tasks. Propose at most
 three experiments (tasks are uncapped; a wave may be tasks only — the project's
 first wave usually is). Use `depends_on` — keys from this spec, or existing
 `exp_`/`task_` ids — when a node must not start before another has succeeded:
-an experiment waits at `ready_to_run`, a task before it delivers. Node names
+execution dispatch waits on dependencies, and task delivery rechecks them. Node names
 must be unique across the wave. Tasks may follow anything; an experiment may
 follow tasks only — never another experiment of this spec, directly or through
 a chain of tasks. Sequential experiments belong to the next reflection, after

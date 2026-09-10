@@ -27,7 +27,13 @@ execution when the design still stands or to planning when the design itself
 was flawed. Follow the returned state and `next_action`; never infer a
 transition from memory.
 
-Operate in this loop:
+An auto-run assignment owns one workflow node. Start from its brief and exact
+references; use `workflow.assignment(project_id, instance_id)` for current
+prerequisites and actions. Submit the node's durable evidence, take its allowed
+transition with the assigned `expected_revision`, and stop when it hands off.
+The next node may run in a fresh agent. Resume retained work before repeating it.
+
+For an interactive session, operate in this loop:
 
 0. If this context window has no `agent_id` yet, call `agent.hello` once and
    pass the returned `agent_id` in every Merv call below. Subagents call it
@@ -37,7 +43,11 @@ Operate in this loop:
    known to be bound to exactly one project.
 2. Call `workflow.status_and_next(project_id, experiment_id?)`.
 3. Read its context, gates, allowed actions, missing evidence, and next action.
-4. Do that work locally or through the specialist skill it names.
+4. Before starting the current node's work interactively, call
+   `workflow.begin(project_id, instance_id, expected_revision)` with the revision
+   from its workflow view. It rechecks prerequisites, records actual start, and
+   returns the starting brief without changing state. Then do that work locally
+   or through the specialist skill it names. Auto-run activates its lease itself.
 5. Submit mutations and evidence through MCP.
 6. Call `workflow.status_and_next` again after every transition or review.
 
@@ -60,8 +70,9 @@ this work exist to change confidence in a research claim?
   a claim and never move claim status; the reflection reads their outcomes.
 
 Tasks are uncapped; experiments keep their cap. Both may depend on other wave
-nodes (`depends_on`): an experiment does not start running, and a task does not
-deliver, until every dependency has succeeded. A failed dependency shows up as
+nodes (`depends_on`): execution dispatch waits until every dependency succeeds,
+and task delivery rechecks the same condition. An approved experiment is already
+`running` while its prerequisites may still block actual work. A failed dependency shows up as
 `dependency_failed` — end the dependent node with a reason, or leave it for the
 next reflection to replan.
 
@@ -101,14 +112,14 @@ creates a better one.
    paragraph on how the task was performed, anything else needed to verify,
    and what not to trust blindly. Merv enforces only the shape (one entry per
    deliverable); the reviewer verifies the substance.
-4. `task.transition(submit_delivery)` → `review.request(target_type="task",
-   role="task_reviewer")` → hand the returned handoff to a separate read-only
-   agent running `task-review`. `needs_changes` sends the task back to
-   `in_progress` with the reviewer's notes in `revision_context`: fix the
-   delivery and resubmit. A `fail` verdict ends the task.
-5. After a passing review, `task.transition(accept, evidence={"outcome": ...})`.
-   The owner may end a task at any point with
-   `task.transition(mark_failed, evidence={"reason": ...})`.
+4. `task.transition(submit_delivery)` opens the independent review node. In
+   auto-run, stop after submission; Merv dispatches a `task-review` agent.
+   In an interactive session, use `review.request(target_type="task",
+   role="task_reviewer")` to obtain a handoff for a separate reviewer.
+   `needs_changes` returns to `in_progress` with notes in `revision_context`;
+   fix the delivery and resubmit. A `fail` verdict ends the task.
+5. A passing review completes the task automatically. The owner may end its
+   assigned work with `task.transition(mark_failed, evidence={"reason": ...})`.
 
 Use `workflow.status_and_next(project_id, task_id=...)` for the task's gate,
 checks, brief, delivery, and dependencies. A closed task refuses new artifacts.
@@ -199,18 +210,19 @@ results support it under the pre-registered rule.
 
 ## Submit artifacts
 
-Follow `artifact_guidance` and the `artifact.submit` tool contract for roles,
+Follow `artifact_guidance` and the `artifact.upload` tool contract for roles,
 fields, limits, figures, and upload commands. The durable evidence is the
 uploaded content, not the current local file:
 
 1. Write or update the local file.
-2. Submit its metadata with the exact target and role requested by the
-   workflow.
+2. Call `artifact.upload` with the file `path` and
+   `attach_to: {target_type, target_id, role}` from the workflow. Add `lens_id`
+   inside `attach_to` only for `reflection_lens_doc`.
 3. Run every returned upload command, including figure uploads.
 4. After any edit that should affect a gate, resubmit and upload the file.
 
 Use artifact ids already returned in authoritative context. Batch focused
-reads with `artifact.find`; request full content only when summaries cannot
+reads with `artifact.read`; request full content only when summaries cannot
 answer the question.
 
 ## Route specialist work
@@ -231,8 +243,10 @@ long-running, data-intensive, or GPU work.
 
 ## Coordinate reviews
 
-When the workflow requests review, use `review.request` and pass its returned
-handoff unchanged to a separate read-only agent:
+Entering a review node queues its independent review. Auto-run dispatches it
+and ends the producer's assignment; stop after handing off the evidence. In an
+interactive session, use `review.request` and pass its returned handoff unchanged
+to a separate read-only agent:
 
 - `experiment-design-review` before execution.
 - `experiment-attempt-review` after result submission.
@@ -242,8 +256,12 @@ The reviewer owns `review.start` and `review.submit`; the producing agent must
 not review its own work. Preserve the capability long enough to hand it off,
 and do not replace a still-valid request merely because review started.
 
-After submission, call `workflow.status_and_next` and follow its return state.
-Revise and resubmit the affected artifacts before retrying a rejected gate.
+Review submission routes the next state atomically: a passing design enters
+execution directly; a passing attempt completes the experiment; a passing task
+review completes the task. Interactive agents refresh `workflow.status_and_next`
+afterward. A dispatched reviewer stops after its verdict, and a fresh assignment
+handles any revisions. Revise and resubmit affected artifacts before retrying a
+rejected gate.
 
 ## Complete only through MCP
 
@@ -252,7 +270,7 @@ Complete an experiment only after:
 - the required plan, result, report, and logic-graph evidence is submitted;
 - required reviews have passed;
 - the conclusion is grounded in the submitted record; and
-- MCP accepts the completion transition.
+- MCP records the passing attempt review and the resulting completion.
 
 If MCP rejects an action, follow its reported gate and next action. Do not work
 around the state machine.
